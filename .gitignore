@@ -1,4 +1,62 @@
-.env
-venv/
+# Python
 __pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+.envrc
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Pytest
 .pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# Flask
+instance/
+*.log
+flask_session/
+
+# Python build
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Operating systems
+.DS_Store
+Thumbs.db
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Temporary files
+*.tmp
+*.bak
+*.pyc
+
+# Type checking and linting
+.mypy_cache/
+.ruff_cache/
+.pyright/
+
+# Jupyter
+.ipynb_checkpoints/
