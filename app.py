@@ -33,7 +33,8 @@ _geocode_last_request = None
 
 
 def geocode(address):
-    """Retorna (latitude, longitude) em graus ou None se a consulta falhar.
+    """Retorna (latitude, longitude) em graus, None quando
+    não encontra o endereço e lança RuntimeError em falhas do serviço.
 
     Limita consultas a uma por segundo e guarda até 128 endereços por processo.
     """
@@ -58,19 +59,19 @@ def geocode(address):
                 timeout=5,
             )
             if response.status_code != 200:
-                return None
+                raise RuntimeError("Falha no serviço de geocodificação")
             results = response.json()
             if not isinstance(results, list):
-                return None
+                raise RuntimeError("Falha no serviço de geocodificação")
             coordinates = None
             if results:
                 latitude = float(results[0]["lat"])
                 longitude = float(results[0]["lon"])
                 if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-                    return None
+                    raise RuntimeError("Falha no serviço de geocodificação")
                 coordinates = (latitude, longitude)
         except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
-            return None
+            raise RuntimeError("Falha no serviço de geocodificação")
 
         if len(_geocode_cache) >= 128:
             _geocode_cache.pop(next(iter(_geocode_cache)))
@@ -178,15 +179,18 @@ def rota():
     if "" in [body["origem"], body["destino"]]:
         return jsonify({"erro": "Entrada inválida."}), 400
 
-    geocode_origem = geocode(body["origem"])
+    try:
+        geocode_origem = geocode(body["origem"])
 
-    if not geocode_origem:
-        return jsonify({"erro": "Não foi possível encontrar a origem."}), 404
+        if not geocode_origem:
+            return jsonify({"erro": "Não foi possível encontrar a origem."}), 404
 
-    geocode_destino = geocode(body["destino"])
+        geocode_destino = geocode(body["destino"])
 
-    if not geocode_destino:
-        return jsonify({"erro": "Não foi possível encontrar o destino."}), 404
+        if not geocode_destino:
+            return jsonify({"erro": "Não foi possível encontrar o destino."}), 404
+    except RuntimeError:
+        return jsonify({"erro": "Falha no serviço de geocodificação"}), 502
 
     origem = {"lat": geocode_origem[0], "lng": geocode_origem[1]}
     destino = {"lat": geocode_destino[0], "lng": geocode_destino[1]}
