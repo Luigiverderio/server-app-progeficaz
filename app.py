@@ -6,6 +6,7 @@ from datetime import timedelta
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager
+from pymongo.errors import DuplicateKeyError
 
 load_dotenv()
 
@@ -19,6 +20,8 @@ bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
 
 db = connect_db()
+if db is not None:
+    db["users"].create_index("email", unique=True)
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -44,6 +47,9 @@ def register():
     if "" in [body["name"], body["email"], body["password"].strip()]:
         return jsonify({"erro": "Entrada inválida."}), 400
 
+    if len(body["password"].encode("utf-8")) > 72:
+        return jsonify({"erro": "A senha deve ter no máximo 72 bytes em UTF-8."}), 400
+
     if db is None:
         return jsonify({"erro": "Banco de dados indisponível"}), 503
 
@@ -58,7 +64,10 @@ def register():
         "password": bcrypt.generate_password_hash(body["password"]).decode("utf-8")
     }
 
-    infos = collection_users.insert_one(new_user)
+    try:
+        infos = collection_users.insert_one(new_user)
+    except DuplicateKeyError:
+        return jsonify({"erro": "E-mail já cadastrado"}), 409
 
     return jsonify({"id": str(infos.inserted_id)}), 201
 
