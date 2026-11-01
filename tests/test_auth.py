@@ -104,3 +104,70 @@ def test_repeated_email_returns_conflict(auth):
 def test_register_unavailable_database(load_app):
     module = load_app()
     assert register(module).status_code == 503
+
+
+@pytest.mark.parametrize("password", ["x" * 73, "á" * 37])
+@pytest.mark.parametrize("existing", [True, False])
+def test_login_long_password_has_generic_error(auth, password, existing):
+    module, _ = auth
+    if existing:
+        assert register(module).status_code == 201
+    with module.app.test_client() as client:
+        response = client.post(
+            "/auth/login", json={"email": "user@example.com", "password": password}
+        )
+    assert response.status_code == 401
+    assert response.json == {"erro": "E-mail ou senha inválidos"}
+
+
+@pytest.mark.parametrize("password", ["valid-password", "x" * 72, "á" * 36])
+def test_register_then_login_returns_valid_token(auth, password):
+    from flask_jwt_extended import decode_token
+
+    module, _ = auth
+    registered = register(module, password=password)
+    with module.app.test_client() as client:
+        response = client.post(
+            "/auth/login", json={"email": "user@example.com", "password": password}
+        )
+    assert response.status_code == 200
+    assert response.json["name"] == "User"
+    with module.app.app_context():
+        claims = decode_token(response.json["token"])
+    assert claims["sub"] == registered.json["id"]
+    assert claims["exp"] - claims["iat"] == 3600
+
+
+def test_login_invalid_credentials_have_same_error(auth):
+    module, _ = auth
+    assert register(module).status_code == 201
+    with module.app.test_client() as client:
+        wrong_password = client.post(
+            "/auth/login", json={"email": "user@example.com", "password": "wrong"}
+        )
+        unknown_email = client.post(
+            "/auth/login", json={"email": "unknown@example.com", "password": "wrong"}
+        )
+    assert wrong_password.status_code == unknown_email.status_code == 401
+    assert wrong_password.json == unknown_email.json
+
+
+@pytest.mark.parametrize("route", ["register", "login"])
+@pytest.mark.parametrize(
+    "body", [None, [], {}, {"email": 123, "password": "valid-password"},
+             {"name": "User", "email": "   ", "password": "valid-password"}]
+)
+def test_auth_invalid_input(auth, route, body):
+    module, _ = auth
+    with module.app.test_client() as client:
+        response = client.post("/auth/" + route, json=body)
+    assert response.status_code == 400
+
+
+def test_login_unavailable_database(load_app):
+    module = load_app()
+    with module.app.test_client() as client:
+        response = client.post(
+            "/auth/login", json={"email": "user@example.com", "password": "valid-password"}
+        )
+    assert response.status_code == 503

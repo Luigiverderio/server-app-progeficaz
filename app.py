@@ -86,6 +86,9 @@ def login():
     if "" in [body["email"], body["password"].strip()]:
         return jsonify({"erro": "Entrada inválida."}), 400
 
+    if len(body["password"].encode("utf-8")) > 72:
+        return jsonify({"erro": "E-mail ou senha inválidos"}), 401
+
     if db is None:
         return jsonify({"erro": "Banco de dados indisponível"}), 503
 

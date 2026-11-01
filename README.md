@@ -11,7 +11,8 @@ com e-mails duplicados, resolva os conflitos antes de iniciar a aplicação; nen
 documento é removido automaticamente.
 
 As senhas aceitam até 72 bytes em UTF-8, limite do bcrypt. Caracteres acentuados
-podem ocupar mais de um byte. Senhas acima do limite retornam HTTP 400 no cadastro.
+podem ocupar mais de um byte. Senhas acima do limite retornam HTTP 400 no cadastro
+e HTTP 401 no login, com a mesma mensagem de credenciais inválidas.
 
 ## Testes
 
