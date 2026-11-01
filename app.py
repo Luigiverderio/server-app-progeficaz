@@ -2,6 +2,9 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from db import connect_db
 import os
+import time
+from threading import Lock
+import requests
 from datetime import timedelta
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
@@ -22,6 +25,57 @@ jwt = JWTManager(app)
 db = connect_db()
 if db is not None:
     db["users"].create_index("email", unique=True)
+
+_geocode_lock = Lock()
+_geocode_cache = {}
+_geocode_last_request = None
+
+
+def geocode(address):
+    """Retorna (latitude, longitude) em graus ou None se a consulta falhar.
+
+    Limita consultas a uma por segundo e guarda até 128 endereços por processo.
+    """
+    global _geocode_last_request
+    if not isinstance(address, str) or not address.strip():
+        return None
+    address = address.strip()
+
+    with _geocode_lock:
+        if address in _geocode_cache:
+            return _geocode_cache[address]
+
+        if _geocode_last_request is not None:
+            time.sleep(max(0, 1 - (time.monotonic() - _geocode_last_request)))
+        _geocode_last_request = time.monotonic()
+
+        try:
+            response = requests.get(
+                os.getenv("NOMINATIM_URL", "https://nominatim.openstreetmap.org/search"),
+                params={"q": address, "format": "json", "limit": 1},
+                headers={"User-Agent": "server-app-progeficaz/1.0 (https://github.com/Luigiverderio/server-app-progeficaz)"},
+                timeout=5,
+            )
+            if response.status_code != 200:
+                return None
+            results = response.json()
+            if not isinstance(results, list):
+                return None
+            coordinates = None
+            if results:
+                latitude = float(results[0]["lat"])
+                longitude = float(results[0]["lon"])
+                if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                    return None
+                coordinates = (latitude, longitude)
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
+            return None
+
+        if len(_geocode_cache) >= 128:
+            _geocode_cache.pop(next(iter(_geocode_cache)))
+        _geocode_cache[address] = coordinates
+        return coordinates
+
 
 @app.route("/health", methods=["GET"])
 def health():
