@@ -5,7 +5,7 @@ import os
 from datetime import timedelta
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager
+from flask_jwt_extended import JWTManager, create_access_token
 
 load_dotenv()
 
@@ -60,6 +60,36 @@ def register():
 
     return jsonify({"id": str(infos.inserted_id)}), 201
 
+@app.route("/auth/login", methods=["POST"])
+def login():
+    body = request.get_json(silent=True)
+    if not type(body) is dict:
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not body.get("email") or not body.get("password"):
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not type(body["email"]) is str or not type(body["password"]) is str:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    body["email"] = body["email"].strip()
+
+    if "" in [body["email"], body["password"].strip()]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_users = db["users"]
+    user = collection_users.find_one({"email": body["email"]})
+
+    if not user:
+        return jsonify({"erro": "E-mail ou senha inválidos"}), 401
+
+    if not bcrypt.check_password_hash(user["password"], body["password"]):
+        return jsonify({"erro": "E-mail ou senha inválidos"}), 401
+
+    token = create_access_token(identity=str(user["_id"]))
+
+    return jsonify({"token": token, "name": user["name"]}), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
