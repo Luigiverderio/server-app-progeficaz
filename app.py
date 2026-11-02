@@ -185,6 +185,11 @@ def criar_favorita():
     if not type(ultima_duracao_min) in [float, int]:
         return jsonify({"erro": "Entrada inválida."}), 400
 
+    try:
+        ultima_duracao_min = float(ultima_duracao_min)
+    except OverflowError:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
     if ultima_duracao_min < 0 or not math.isfinite(ultima_duracao_min):
         return jsonify({"erro": "Entrada inválida."}), 400
 
