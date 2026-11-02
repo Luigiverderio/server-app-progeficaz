@@ -8,8 +8,9 @@ import requests
 from datetime import timedelta
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from pymongo.errors import DuplicateKeyError
+import math
 
 load_dotenv()
 
@@ -158,6 +159,54 @@ def login():
     token = create_access_token(identity=str(user["_id"]))
 
     return jsonify({"token": token, "name": user["name"]}), 200
+
+@app.route("/favoritas", methods=["POST"])
+@jwt_required()
+def criar_favorita():
+    body = request.get_json(silent=True)
+    if not type(body) is dict:
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not body.get("nome") or not body.get("origem") or not body.get("destino"):
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not type(body["nome"]) is str or not type(body["origem"]) is str or not type(body["destino"]) is str:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    body["nome"] = body["nome"].strip()
+    body["origem"] = body["origem"].strip()
+    body["destino"] = body["destino"].strip()
+
+    if "" in [body["nome"], body["origem"], body["destino"]]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    ultima_duracao_min = body.get("ultima_duracao_min")
+
+    if not type(ultima_duracao_min) in [float, int]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    try:
+        ultima_duracao_min = float(ultima_duracao_min)
+    except OverflowError:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if ultima_duracao_min < 0 or not math.isfinite(ultima_duracao_min):
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    rota_favorita = {
+        "nome": body["nome"],
+        "origem": body["origem"],
+        "destino": body["destino"],
+        "ultima_duracao_min": ultima_duracao_min,
+        "user_id": get_jwt_identity()
+    }
+
+    collection_favoritas = db["favoritas"]
+
+    infos = collection_favoritas.insert_one(rota_favorita)
+
+    return jsonify({"id": str(infos.inserted_id)}), 201
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
