@@ -30,5 +30,5 @@ def buscar_rota(origem, destino):
             "distancia_km": round(rota["distance"]/1000, 2),
             "coordenadas": pontos_invertidos
         }
-    except requests.exceptions.RequestException:
+    except (requests.exceptions.RequestException, ValueError, KeyError, TypeError, IndexError, AttributeError):
         return None

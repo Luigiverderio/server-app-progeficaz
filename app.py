@@ -8,9 +8,13 @@ import requests
 from datetime import timedelta
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required
-from pymongo.errors import DuplicateKeyError
 from routing import buscar_rota
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
+import math
+from bson import ObjectId
+from bson.errors import InvalidId
 
 load_dotenv()
 
@@ -32,9 +36,11 @@ _geocode_cache = {}
 _geocode_last_request = None
 
 
-def geocode(address):
-    """Retorna (latitude, longitude) em graus, None quando
-    não encontra o endereço e lança RuntimeError em falhas do serviço.
+def geocode(address, *, raise_on_error=False):
+    """Retorna (latitude, longitude) em graus ou None se a consulta falhar.
+
+    Com raise_on_error=True, lança RuntimeError em falhas do serviço para
+    permitir que o endpoint diferencie indisponibilidade de endereço ausente.
 
     Limita consultas a uma por segundo e guarda até 128 endereços por processo.
     """
@@ -70,8 +76,10 @@ def geocode(address):
                 if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
                     raise RuntimeError("Falha no serviço de geocodificação")
                 coordinates = (latitude, longitude)
-        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
-            raise RuntimeError("Falha no serviço de geocodificação")
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError, RuntimeError) as error:
+            if raise_on_error:
+                raise RuntimeError("Falha no serviço de geocodificação") from error
+            return None
 
         if len(_geocode_cache) >= 128:
             _geocode_cache.pop(next(iter(_geocode_cache)))
@@ -180,12 +188,12 @@ def rota():
         return jsonify({"erro": "Entrada inválida."}), 400
 
     try:
-        geocode_origem = geocode(body["origem"])
+        geocode_origem = geocode(body["origem"], raise_on_error=True)
 
         if not geocode_origem:
             return jsonify({"erro": "Não foi possível encontrar a origem."}), 404
 
-        geocode_destino = geocode(body["destino"])
+        geocode_destino = geocode(body["destino"], raise_on_error=True)
 
         if not geocode_destino:
             return jsonify({"erro": "Não foi possível encontrar o destino."}), 404
@@ -206,6 +214,145 @@ def rota():
         "coordenadas": rota_encontrada["coordenadas"],
         "origem": origem,
         "destino": destino}), 200
+
+@app.route("/favoritas", methods=["POST"])
+@jwt_required()
+def criar_favorita():
+    body = request.get_json(silent=True)
+    if not type(body) is dict:
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not body.get("nome") or not body.get("origem") or not body.get("destino"):
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not type(body["nome"]) is str or not type(body["origem"]) is str or not type(body["destino"]) is str:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    body["nome"] = body["nome"].strip()
+    body["origem"] = body["origem"].strip()
+    body["destino"] = body["destino"].strip()
+
+    if "" in [body["nome"], body["origem"], body["destino"]]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    ultima_duracao_min = body.get("ultima_duracao_min")
+
+    if not type(ultima_duracao_min) in [float, int]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    try:
+        ultima_duracao_min = float(ultima_duracao_min)
+    except OverflowError:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if ultima_duracao_min < 0 or not math.isfinite(ultima_duracao_min):
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    rota_favorita = {
+        "nome": body["nome"],
+        "origem": body["origem"],
+        "destino": body["destino"],
+        "ultima_duracao_min": ultima_duracao_min,
+        "user_id": get_jwt_identity()
+    }
+
+    collection_favoritas = db["favoritas"]
+
+    infos = collection_favoritas.insert_one(rota_favorita)
+
+    return jsonify({"id": str(infos.inserted_id)}), 201
+
+@app.route("/favoritas", methods=["GET"])
+@jwt_required()
+def listar_favoritas():
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_favoritas = db["favoritas"]
+
+    user_id = get_jwt_identity()
+
+    favoritas = []
+
+    for doc in collection_favoritas.find({ "user_id": user_id }):
+        favoritas.append({
+            "id": str(doc["_id"]),
+            "nome": doc["nome"],
+            "origem": doc["origem"],
+            "destino": doc["destino"],
+            "ultima_duracao_min": doc["ultima_duracao_min"]
+        })
+
+    return jsonify({"total": len(favoritas), "favoritas": favoritas}), 200
+
+@app.route("/favoritas/<id>", methods=["DELETE"])
+@jwt_required()
+def apagar_favoritas(id):
+    try:
+        object_id = ObjectId(id)
+    except InvalidId:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_favoritas = db["favoritas"]
+
+    user_id = get_jwt_identity()
+
+    infos = collection_favoritas.delete_one({ "user_id": user_id, "_id":object_id})
+    if infos.deleted_count == 0:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+    return "", 204
+
+@app.route("/favoritas/<id>", methods=["PUT"])
+@jwt_required()
+def atualizar_favoritas(id):
+    try:
+        object_id = ObjectId(id)
+    except InvalidId:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+
+    body = request.get_json(silent=True)
+    if not type(body) is dict:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    ultima_duracao_min = body.get("ultima_duracao_min")
+
+    if not type(ultima_duracao_min) in [float, int]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    try:
+        ultima_duracao_min = float(ultima_duracao_min)
+    except OverflowError:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if ultima_duracao_min < 0 or not math.isfinite(ultima_duracao_min):
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_favoritas = db["favoritas"]
+
+    user_id = get_jwt_identity()
+
+    doc = collection_favoritas.find_one_and_update(
+        {"user_id": user_id, "_id": object_id},
+        {"$set": {"ultima_duracao_min": ultima_duracao_min}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc is None:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+
+    return jsonify({
+            "id": str(doc["_id"]),
+            "nome": doc["nome"],
+            "origem": doc["origem"],
+            "destino": doc["destino"],
+            "ultima_duracao_min": doc["ultima_duracao_min"]
+        }), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)

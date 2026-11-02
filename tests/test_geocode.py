@@ -36,8 +36,7 @@ def test_geocode_network_failure_keeps_server_running(load_app, monkeypatch, err
     module = load_app()
     monkeypatch.setattr(module.requests, "get", Mock(side_effect=error))
 
-    with pytest.raises(RuntimeError, match="Falha no serviço de geocodificação"):
-        module.geocode("Av. Paulista, 1578, São Paulo")
+    assert module.geocode("Av. Paulista, 1578, São Paulo") is None
     assert module.app.test_client().get("/health").status_code == 503
     assert module._geocode_cache == {}
 
@@ -46,8 +45,7 @@ def test_geocode_network_failure_keeps_server_running(load_app, monkeypatch, err
 def test_geocode_http_failure(load_app, monkeypatch, status):
     module = load_app()
     monkeypatch.setattr(module.requests, "get", Mock(return_value=Mock(status_code=status)))
-    with pytest.raises(RuntimeError, match="Falha no serviço de geocodificação"):
-        module.geocode("Av. Paulista, 1578, São Paulo")
+    assert module.geocode("Av. Paulista, 1578, São Paulo") is None
 
 
 @pytest.mark.parametrize("payload", [
@@ -60,8 +58,7 @@ def test_geocode_invalid_response(load_app, monkeypatch, payload):
     monkeypatch.setattr(module.requests, "get", Mock(return_value=Mock(
         status_code=200, json=Mock(return_value=payload)
     )))
-    with pytest.raises(RuntimeError, match="Falha no serviço de geocodificação"):
-        module.geocode("Av. Paulista, 1578, São Paulo")
+    assert module.geocode("Av. Paulista, 1578, São Paulo") is None
 
 
 def test_geocode_invalid_json(load_app, monkeypatch):
@@ -69,8 +66,7 @@ def test_geocode_invalid_json(load_app, monkeypatch):
     monkeypatch.setattr(module.requests, "get", Mock(return_value=Mock(
         status_code=200, json=Mock(side_effect=ValueError("JSON inválido"))
     )))
-    with pytest.raises(RuntimeError, match="Falha no serviço de geocodificação"):
-        module.geocode("Av. Paulista, 1578, São Paulo")
+    assert module.geocode("Av. Paulista, 1578, São Paulo") is None
 
 
 @pytest.mark.parametrize("address", [None, "", "   ", 123])

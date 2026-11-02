@@ -19,6 +19,9 @@ e HTTP 401 no login, com a mesma mensagem de credenciais inválidas.
 `geocode(endereco)` em `app.py` retorna `(latitude, longitude)` como números ou
 `None` quando não encontra o endereço ou ocorre uma falha na consulta.
 A função não define respostas HTTP; quem a chama decide a resposta ao usuário.
+O endpoint `POST /rota` usa a opção `raise_on_error=True` para responder 502
+quando o serviço falha e 404 quando o endereço não é encontrado. Ele exige JWT
+e recebe `origem` e `destino` como endereços em texto no JSON.
 
 O serviço pode ser alterado pela variável opcional `NOMINATIM_URL` (URL de busca).
 As consultas têm timeout de 5 segundos, identificação via `User-Agent`, cache
