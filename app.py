@@ -8,6 +8,7 @@ import requests
 from datetime import timedelta
 from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
+from routing import buscar_rota
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from pymongo.errors import DuplicateKeyError
 from pymongo import ReturnDocument
@@ -35,8 +36,11 @@ _geocode_cache = {}
 _geocode_last_request = None
 
 
-def geocode(address):
+def geocode(address, *, raise_on_error=False):
     """Retorna (latitude, longitude) em graus ou None se a consulta falhar.
+
+    Com raise_on_error=True, lança RuntimeError em falhas do serviço para
+    permitir que o endpoint diferencie indisponibilidade de endereço ausente.
 
     Limita consultas a uma por segundo e guarda até 128 endereços por processo.
     """
@@ -61,18 +65,20 @@ def geocode(address):
                 timeout=5,
             )
             if response.status_code != 200:
-                return None
+                raise RuntimeError("Falha no serviço de geocodificação")
             results = response.json()
             if not isinstance(results, list):
-                return None
+                raise RuntimeError("Falha no serviço de geocodificação")
             coordinates = None
             if results:
                 latitude = float(results[0]["lat"])
                 longitude = float(results[0]["lon"])
                 if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
-                    return None
+                    raise RuntimeError("Falha no serviço de geocodificação")
                 coordinates = (latitude, longitude)
-        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError):
+        except (requests.exceptions.RequestException, ValueError, KeyError, TypeError, RuntimeError) as error:
+            if raise_on_error:
+                raise RuntimeError("Falha no serviço de geocodificação") from error
             return None
 
         if len(_geocode_cache) >= 128:
@@ -162,6 +168,52 @@ def login():
     token = create_access_token(identity=str(user["_id"]))
 
     return jsonify({"token": token, "name": user["name"]}), 200
+
+@app.route("/rota", methods=["POST"])
+@jwt_required()
+def rota():
+    body = request.get_json(silent=True)
+
+    if not type(body) is dict:
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not body.get("origem") or not body.get("destino"):
+        return jsonify({"erro": "Entrada inválida."}), 400
+    if not type(body["origem"]) is str or not type(body["destino"]) is str:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    body["origem"] = body["origem"].strip()
+    body["destino"] = body["destino"].strip()
+
+    if "" in [body["origem"], body["destino"]]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    try:
+        geocode_origem = geocode(body["origem"], raise_on_error=True)
+
+        if not geocode_origem:
+            return jsonify({"erro": "Não foi possível encontrar a origem."}), 404
+
+        geocode_destino = geocode(body["destino"], raise_on_error=True)
+
+        if not geocode_destino:
+            return jsonify({"erro": "Não foi possível encontrar o destino."}), 404
+    except RuntimeError:
+        return jsonify({"erro": "Falha no serviço de geocodificação"}), 502
+
+    origem = {"lat": geocode_origem[0], "lng": geocode_origem[1]}
+    destino = {"lat": geocode_destino[0], "lng": geocode_destino[1]}
+
+    rota_encontrada = buscar_rota(origem, destino)
+
+    if not rota_encontrada:
+        return jsonify({"erro": "Falha no serviço de rotas."}), 502
+
+    return jsonify({
+        "duracao_min": rota_encontrada["duracao_min"],
+        "distancia_km": rota_encontrada["distancia_km"],
+        "coordenadas": rota_encontrada["coordenadas"],
+        "origem": origem,
+        "destino": destino}), 200
 
 @app.route("/favoritas", methods=["POST"])
 @jwt_required()
