@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
 import math
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -252,6 +253,54 @@ def apagar_favoritas(id):
     if infos.deleted_count == 0:
         return jsonify({"erro": "Favorita não encontrada"}), 404
     return "", 204
+
+@app.route("/favoritas/<id>", methods=["PUT"])
+@jwt_required()
+def atualizar_favoritas(id):
+    try:
+        object_id = ObjectId(id)
+    except InvalidId:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+
+    body = request.get_json(silent=True)
+    if not type(body) is dict:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    ultima_duracao_min = body.get("ultima_duracao_min")
+
+    if not type(ultima_duracao_min) in [float, int]:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    try:
+        ultima_duracao_min = float(ultima_duracao_min)
+    except OverflowError:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if ultima_duracao_min < 0 or not math.isfinite(ultima_duracao_min):
+        return jsonify({"erro": "Entrada inválida."}), 400
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_favoritas = db["favoritas"]
+
+    user_id = get_jwt_identity()
+
+    doc = collection_favoritas.find_one_and_update(
+        {"user_id": user_id, "_id": object_id},
+        {"$set": {"ultima_duracao_min": ultima_duracao_min}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc is None:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+
+    return jsonify({
+            "id": str(doc["_id"]),
+            "nome": doc["nome"],
+            "origem": doc["origem"],
+            "destino": doc["destino"],
+            "ultima_duracao_min": doc["ultima_duracao_min"]
+        }), 200
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
