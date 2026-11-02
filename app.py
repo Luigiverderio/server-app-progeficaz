@@ -10,6 +10,7 @@ from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
 import math
 from bson import ObjectId
 from bson.errors import InvalidId
@@ -270,6 +271,11 @@ def atualizar_favoritas(id):
     if not type(ultima_duracao_min) in [float, int]:
         return jsonify({"erro": "Entrada inválida."}), 400
 
+    try:
+        ultima_duracao_min = float(ultima_duracao_min)
+    except OverflowError:
+        return jsonify({"erro": "Entrada inválida."}), 400
+
     if ultima_duracao_min < 0 or not math.isfinite(ultima_duracao_min):
         return jsonify({"erro": "Entrada inválida."}), 400
 
@@ -280,11 +286,14 @@ def atualizar_favoritas(id):
 
     user_id = get_jwt_identity()
 
-    infos = collection_favoritas.update_one({ "user_id": user_id, "_id":object_id}, {"$set": { "ultima_duracao_min": ultima_duracao_min }})
-    if infos.matched_count == 0:
+    doc = collection_favoritas.find_one_and_update(
+        {"user_id": user_id, "_id": object_id},
+        {"$set": {"ultima_duracao_min": ultima_duracao_min}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if doc is None:
         return jsonify({"erro": "Favorita não encontrada"}), 404
 
-    doc = collection_favoritas.find_one({ "user_id": user_id, "_id":object_id})
     return jsonify({
             "id": str(doc["_id"]),
             "nome": doc["nome"],
