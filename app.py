@@ -11,6 +11,8 @@ from flask_bcrypt import Bcrypt
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 from pymongo.errors import DuplicateKeyError
 import math
+from bson import ObjectId
+from bson.errors import InvalidId
 
 load_dotenv()
 
@@ -225,6 +227,26 @@ def listar_favoritas():
         })
 
     return jsonify({"total": len(favoritas), "favoritas": favoritas}), 200
+
+@app.route("/favoritas/<id>", methods=["DELETE"])
+@jwt_required()
+def apagar_favoritas(id):
+    try:
+        object_id = ObjectId(id)
+    except InvalidId:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_favoritas = db["favoritas"]
+
+    user_id = get_jwt_identity()
+
+    infos = collection_favoritas.delete_one({ "user_id": user_id, "_id":object_id})
+    if infos.deleted_count == 0:
+        return jsonify({"erro": "Favorita não encontrada"}), 404
+    return "", 204
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
