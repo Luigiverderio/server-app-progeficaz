@@ -203,5 +203,28 @@ def criar_favorita():
 
     return jsonify({"id": str(infos.inserted_id)}), 201
 
+@app.route("/favoritas", methods=["GET"])
+@jwt_required()
+def listar_favoritas():
+    if db is None:
+        return jsonify({"erro": "Banco de dados indisponível"}), 503
+
+    collection_favoritas = db["favoritas"]
+
+    user_id = get_jwt_identity()
+
+    favoritas = []
+
+    for doc in collection_favoritas.find({ "user_id": user_id }):
+        favoritas.append({
+            "id": str(doc["_id"]),
+            "nome": doc["nome"],
+            "origem": doc["origem"],
+            "destino": doc["destino"],
+            "ultima_duracao_min": doc["ultima_duracao_min"]
+        })
+
+    return jsonify({"total": len(favoritas), "favoritas": favoritas}), 200
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
