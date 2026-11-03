@@ -1,5 +1,12 @@
 # server-app-progeficaz
 
+## 🔗 Links
+
+- **API no ar (AWS EC2):** http://3.141.166.91
+- **Teste rápido:** http://3.141.166.91/health → `{"status":"ok"}`
+- **Front-end (AWS S3):** http://route-calculator-static.s3-website.us-east-2.amazonaws.com
+- **Repositório do cliente:** https://github.com/Luigiverderio/app-progeficaz-route-calculator
+
 API Flask para calcular trajetos a pé e gerenciar favoritas por usuário.
 Frontend: [app-progeficaz-route-calculator](https://github.com/Luigiverderio/app-progeficaz-route-calculator).
 
