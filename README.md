@@ -43,7 +43,27 @@ pytest -v
 
 Os testes usam uma coleção simulada e não acessam o MongoDB configurado no `.env`.
 O `test_app.py`, ao lado de `app.py`, contém o fixture `client` e os testes HTTP
-de autenticação e favoritas, organizados com comentários Given-When-Then.
+de autenticação, favoritas e `POST /rota`, organizados com comentários Given-When-Then.
 O `connect_db` é substituído antes da importação da aplicação, e cada teste
 recebe um banco falso com `MagicMock`. Tokens JWT de teste mantêm a autenticação
 das rotas protegidas ativa.
+
+Os testes de `POST /rota` simulam `requests.get` com `side_effect`: duas respostas
+do Nominatim e uma do OSRM, além dos casos 401, 400, 404 e 502.
+O cache da geocodificação é isolado por teste, sem esperas reais entre chamadas.
+
+O `conftest.py` da raiz bloqueia MongoClient, HTTP real, conexões de socket e
+resolução DNS desde a coleta dos testes. Qualquer tentativa de acesso externo
+gera uma falha; a suíte roda sem Atlas e sem internet. Para repetir a verificação
+com o wi-fi desligado, desative a rede e execute o mesmo `pytest -v`.
+
+Para executar apenas os casos de rota ou investigar uma falha:
+
+```powershell
+pytest -v -k test_rota
+pytest -v -x
+pytest -v -s
+```
+
+Referências: [side_effect no unittest.mock](https://docs.python.org/3/library/unittest.mock.html#unittest.mock.Mock.side_effect)
+e [tokens JWT](https://flask-jwt-extended.readthedocs.io/en/stable/basic_usage.html).
