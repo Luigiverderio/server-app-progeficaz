@@ -38,7 +38,12 @@ Ao exibir os resultados, inclua a atribuição
 
 ```powershell
 python -m pip install -r requirements.txt
-python -m pytest -q
+pytest -v
 ```
 
 Os testes usam uma coleção simulada e não acessam o MongoDB configurado no `.env`.
+O `test_app.py`, ao lado de `app.py`, contém o fixture `client` e os testes HTTP
+de autenticação e favoritas, organizados com comentários Given-When-Then.
+O `connect_db` é substituído antes da importação da aplicação, e cada teste
+recebe um banco falso com `MagicMock`. Tokens JWT de teste mantêm a autenticação
+das rotas protegidas ativa.
