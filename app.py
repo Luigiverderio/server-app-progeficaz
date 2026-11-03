@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 from flask_bcrypt import Bcrypt
 from routing import buscar_rota
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, PyMongoError
 from pymongo import ReturnDocument
 import math
 from bson import ObjectId
@@ -23,9 +23,27 @@ app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY")
 if not app.config["JWT_SECRET_KEY"] or not app.config["JWT_SECRET_KEY"].strip():
     raise RuntimeError("JWT_SECRET_KEY deve estar configurada e não pode ser vazia")
 app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
-CORS(app)
+CORS(app, origins=[
+    origin.strip()
+    for origin in os.getenv(
+        "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
+    if origin.strip()
+])
 bcrypt = Bcrypt(app)
 jwt = JWTManager(app)
+
+
+@jwt.invalid_token_loader
+def invalid_token(reason):
+    return jsonify({"erro": "Token inválido. Faça login novamente."}), 401
+
+
+@app.errorhandler(PyMongoError)
+def database_error(error):
+    app.logger.warning("Falha em uma operação no banco de dados")
+    return jsonify({"erro": "Banco de dados indisponível"}), 503
+
 
 db = connect_db()
 if db is not None:
@@ -355,4 +373,4 @@ def atualizar_favoritas(id):
         }), 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="127.0.0.1", port=5000)
