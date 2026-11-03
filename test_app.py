@@ -4,6 +4,7 @@ import os
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from bson import ObjectId
 from flask_jwt_extended import create_access_token, decode_token
 
@@ -299,3 +300,134 @@ def test_favorita_nao_encontrada(client, database, auth_headers, favorita, metho
     # Then: os três casos retornam 404 sem revelar dados de outro usuário.
     assert response.status_code == 404
     assert response.json == {"erro": "Favorita não encontrada"}
+
+
+@pytest.fixture
+def rota_http():
+    import app as app_module
+
+    # Cada teste começa sem cache e simula somente a fronteira HTTP externa.
+    with (
+        patch.object(app_module, "_geocode_cache", {}),
+        patch.object(app_module, "_geocode_last_request", None),
+        patch("app.time.sleep"),
+        patch("requests.get") as get,
+    ):
+        yield get
+
+
+@pytest.fixture
+def resposta_http():
+    def response(payload, status=200):
+        result = MagicMock(spec=requests.Response)
+        result.status_code = status
+        result.json.return_value = payload
+        if status >= 400:
+            result.raise_for_status.side_effect = requests.exceptions.HTTPError()
+        return result
+    return response
+
+
+@pytest.fixture
+def enderecos():
+    return {"origem": "Av. Paulista, 1578, São Paulo", "destino": "Rua Quatá, 300, São Paulo"}
+
+
+@pytest.fixture
+def geocodes(resposta_http):
+    return [
+        resposta_http([{"lat": "-23.5615", "lon": "-46.6560"}]),
+        resposta_http([{"lat": "-23.5983", "lon": "-46.6765"}]),
+    ]
+
+
+def test_rota_exige_token(client, rota_http, enderecos):
+    # Given: endereços válidos, mas nenhum token.
+    # When: o cliente tenta calcular a rota.
+    response = client.post("/rota", json=enderecos)
+
+    # Then: a autenticação impede o acesso antes das APIs externas.
+    assert response.status_code == 401
+    rota_http.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [
+    {}, {"origem": "A"}, {"destino": "B"},
+    {"origem": " ", "destino": "B"}, {"origem": 123, "destino": "B"},
+])
+def test_rota_rejeita_entrada_invalida(client, auth_headers, rota_http, body):
+    # Given: campos obrigatórios ausentes ou inválidos.
+    # When: o usuário autenticado solicita uma rota.
+    response = client.post("/rota", json=body, headers=auth_headers)
+
+    # Then: nenhuma consulta externa é feita e a entrada é rejeitada.
+    assert response.status_code == 400
+    rota_http.assert_not_called()
+
+
+def test_rota_retorna_trajeto_simulado(client, auth_headers, rota_http, resposta_http, geocodes, enderecos):
+    # Given: duas respostas do Nominatim e uma do OSRM, nessa ordem.
+    rota_http.side_effect = geocodes + [resposta_http({
+        "code": "Ok",
+        "routes": [{
+            "duration": 600,
+            "distance": 1250,
+            "geometry": {"coordinates": [[-46.6560, -23.5615], [-46.6765, -23.5983]]},
+        }],
+    })]
+
+    # When: o usuário calcula o trajeto com as APIs simuladas.
+    response = client.post("/rota", json=enderecos, headers=auth_headers)
+
+    # Then: recebe coordenadas em lat/lng, minutos e quilômetros.
+    assert response.status_code == 200
+    assert response.json == {
+        "duracao_min": 10.0,
+        "distancia_km": 1.25,
+        "coordenadas": [[-23.5615, -46.6560], [-23.5983, -46.6765]],
+        "origem": {"lat": -23.5615, "lng": -46.6560},
+        "destino": {"lat": -23.5983, "lng": -46.6765},
+    }
+    assert rota_http.call_count == 3
+    calls = rota_http.call_args_list
+    assert calls[0].kwargs["params"]["q"] == enderecos["origem"]
+    assert calls[1].kwargs["params"]["q"] == enderecos["destino"]
+    assert "/routed-foot/" in calls[2].args[0]
+    assert "-46.656,-23.5615;-46.6765,-23.5983" in calls[2].args[0]
+
+
+@pytest.mark.parametrize("missing", ["origem", "destino"])
+def test_rota_endereco_nao_encontrado(client, auth_headers, rota_http, resposta_http, geocodes, enderecos, missing):
+    # Given: o Nominatim não encontra um dos endereços.
+    rota_http.side_effect = ([] if missing == "origem" else geocodes[:1]) + [resposta_http([])]
+
+    # When: o usuário solicita a rota.
+    response = client.post("/rota", json=enderecos, headers=auth_headers)
+
+    # Then: retorna 404 sem consultar o OSRM.
+    assert response.status_code == 404
+    assert missing in response.json["erro"]
+    assert rota_http.call_count == (1 if missing == "origem" else 2)
+
+
+@pytest.mark.parametrize("service", ["nominatim", "osrm"])
+@pytest.mark.parametrize("failure", ["http", "timeout", "conexao", "json"])
+def test_rota_falha_externa(client, auth_headers, rota_http, resposta_http, geocodes, enderecos, service, failure):
+    # Given: uma API externa falha, sempre sem conexão real.
+    if failure == "http":
+        failed = resposta_http({}, status=503)
+    elif failure == "json":
+        failed = resposta_http(None)
+        failed.json.side_effect = requests.exceptions.JSONDecodeError("JSON inválido", "", 0)
+    elif failure == "timeout":
+        failed = requests.exceptions.Timeout("Tempo esgotado")
+    else:
+        failed = requests.exceptions.ConnectionError("Sem internet")
+    rota_http.side_effect = ([] if service == "nominatim" else geocodes) + [failed]
+
+    # When: o usuário solicita a rota durante a indisponibilidade.
+    response = client.post("/rota", json=enderecos, headers=auth_headers)
+
+    # Then: o servidor responde 502 sem propagar a exceção.
+    assert response.status_code == 502
+    assert rota_http.call_count == (1 if service == "nominatim" else 3)
