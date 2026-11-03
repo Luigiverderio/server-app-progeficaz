@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from bson import ObjectId
-from flask_jwt_extended import decode_token
+from flask_jwt_extended import create_access_token, decode_token
 
 
 # app.py conecta ao banco durante o import. O patch precisa existir antes dele:
@@ -146,3 +146,156 @@ def test_login_rejeita_campo_ausente(client, cadastro, field):
 
     # Then: o servidor informa entrada inválida.
     assert response.status_code == 400
+
+
+@pytest.fixture
+def auth_headers():
+    with app.app_context():
+        token = create_access_token(identity="usuario-logado")
+    return {"Authorization": f"Bearer {token}"}
+
+
+@pytest.fixture
+def favorita():
+    return {
+        "_id": ObjectId(),
+        "user_id": "usuario-logado",
+        "nome": "Casa para faculdade",
+        "origem": "Av. Paulista, 1578, São Paulo",
+        "destino": "Rua Quatá, 300, São Paulo",
+        "ultima_duracao_min": 30.0,
+    }
+
+
+@pytest.mark.parametrize("method,path", [
+    ("post", "/favoritas"),
+    ("get", "/favoritas"),
+    ("put", "/favoritas/507f1f77bcf86cd799439011"),
+    ("delete", "/favoritas/507f1f77bcf86cd799439011"),
+])
+def test_favoritas_exige_token(client, database, method, path):
+    # Given: uma requisição sem token de autenticação.
+    # When: o cliente tenta acessar uma das rotas de favoritas.
+    response = getattr(client, method)(path)
+
+    # Then: o acesso é negado antes de consultar o banco.
+    assert response.status_code == 401
+    database.__getitem__.assert_not_called()
+
+
+def test_cria_favorita_com_dono_do_token(client, database, auth_headers, favorita):
+    # Given: dados válidos e uma tentativa de informar outro dono pelo corpo.
+    body = {key: value for key, value in favorita.items() if key != "_id"}
+    body["user_id"] = "outro-usuario"
+    database["favoritas"].insert_one.return_value.inserted_id = favorita["_id"]
+
+    # When: o cliente autenticado salva a favorita.
+    response = client.post("/favoritas", json=body, headers=auth_headers)
+
+    # Then: a favorita é criada e pertence ao usuário do token.
+    assert response.status_code == 201
+    assert response.json == {"id": str(favorita["_id"])}
+    saved = database["favoritas"].insert_one.call_args.args[0]
+    assert saved == dict(body, user_id="usuario-logado")
+
+
+def test_lista_apenas_favoritas_do_usuario(client, database, auth_headers, favorita):
+    # Given: favoritas de dois usuários diferentes no banco falso.
+    documents = [favorita, dict(favorita, _id=ObjectId(), user_id="outro-usuario")]
+    database["favoritas"].find.side_effect = lambda query: [
+        doc for doc in documents if all(doc.get(key) == value for key, value in query.items())
+    ]
+
+    # When: o cliente solicita suas favoritas.
+    response = client.get("/favoritas", headers=auth_headers)
+
+    # Then: somente o registro do usuário autenticado aparece, sem expor o dono.
+    assert response.status_code == 200
+    assert response.json == {
+        "total": 1,
+        "favoritas": [{
+            "id": str(favorita["_id"]),
+            "nome": favorita["nome"],
+            "origem": favorita["origem"],
+            "destino": favorita["destino"],
+            "ultima_duracao_min": favorita["ultima_duracao_min"],
+        }],
+    }
+
+
+def test_lista_favoritas_vazia(client, database, auth_headers):
+    # Given: o usuário ainda não possui favoritas.
+    database["favoritas"].find.return_value = []
+
+    # When: o cliente consulta a lista.
+    response = client.get("/favoritas", headers=auth_headers)
+
+    # Then: recebe uma lista vazia com status de sucesso.
+    assert response.status_code == 200
+    assert response.json == {"total": 0, "favoritas": []}
+
+
+@pytest.mark.parametrize("duration", [15.0, 30.0])
+def test_atualiza_duracao_da_favorita(client, database, auth_headers, favorita, duration):
+    # Given: uma favorita do usuário, inclusive quando a duração não muda.
+    database["favoritas"].find_one_and_update.return_value = dict(
+        favorita, ultima_duracao_min=duration,
+    )
+
+    # When: o cliente atualiza a duração e tenta alterar campos não permitidos.
+    response = client.put(f"/favoritas/{favorita['_id']}", json={
+        "ultima_duracao_min": duration, "nome": "Outro nome", "user_id": "outro-usuario",
+    }, headers=auth_headers)
+
+    # Then: só a duração é atualizada, com filtro de propriedade.
+    assert response.status_code == 200
+    assert response.json["id"] == str(favorita["_id"])
+    assert response.json["ultima_duracao_min"] == duration
+    assert response.json["nome"] == favorita["nome"]
+    args = database["favoritas"].find_one_and_update.call_args.args
+    assert args == (
+        {"_id": favorita["_id"], "user_id": "usuario-logado"},
+        {"$set": {"ultima_duracao_min": duration}},
+    )
+
+
+def test_apaga_favorita_do_usuario(client, database, auth_headers, favorita):
+    # Given: uma favorita pertencente ao usuário autenticado.
+    database["favoritas"].delete_one.return_value.deleted_count = 1
+
+    # When: o cliente solicita a exclusão.
+    response = client.delete(f"/favoritas/{favorita['_id']}", headers=auth_headers)
+
+    # Then: a exclusão é filtrada pelo dono e a resposta não tem corpo.
+    assert response.status_code == 204
+    assert response.data == b""
+    database["favoritas"].delete_one.assert_called_once_with({
+        "_id": favorita["_id"], "user_id": "usuario-logado",
+    })
+
+
+@pytest.mark.parametrize("method", ["put", "delete"])
+@pytest.mark.parametrize("scenario", ["id-invalido", "inexistente", "outro-usuario"])
+def test_favorita_nao_encontrada(client, database, auth_headers, favorita, method, scenario):
+    # Given: ID inválido, favorita inexistente ou favorita de outro usuário.
+    documents = []
+    if scenario == "outro-usuario":
+        documents.append(dict(favorita, user_id="outro-usuario"))
+
+    def find_owned(query, *args, **kwargs):
+        return next((doc for doc in documents
+                     if all(doc.get(key) == value for key, value in query.items())), None)
+
+    database["favoritas"].find_one_and_update.side_effect = find_owned
+    database["favoritas"].delete_one.side_effect = lambda query: MagicMock(
+        deleted_count=int(find_owned(query) is not None),
+    )
+    identifier = "invalido" if scenario == "id-invalido" else str(favorita["_id"])
+
+    # When: o cliente tenta atualizar ou apagar a favorita.
+    response = getattr(client, method)(f"/favoritas/{identifier}",
+                                      json={"ultima_duracao_min": 10}, headers=auth_headers)
+
+    # Then: os três casos retornam 404 sem revelar dados de outro usuário.
+    assert response.status_code == 404
+    assert response.json == {"erro": "Favorita não encontrada"}
